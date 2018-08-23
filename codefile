@@ -1,0 +1,146 @@
+#https://towardsdatascience.com/easy-text-analysis-on-abc-news-headlines-b434e6e3b5b8
+####required packages
+#install.packages("dplyr")
+#install.packages("RColorBrewer")
+#install.packages("udpipe")
+#install.packages("ggplot2")
+#install.packages("igraph")
+#install.packages("ggraph")
+#install.packages("udpipe.models.ud.2.0", repos = "http://www.datatailor.be/rcube", type = "source")
+
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+
+#some_tweets = searchTwitter("starbucks", n=1500, lang="en")
+## get the text
+#some_txt = sapply(some_tweets, function(x) x$getText())
+
+library(dplyr)
+news <- read.csv('abcnews-date-text.csv', header = T, stringsAsFactors = F)
+print(head(news))
+print(is.data.frame(news))
+news %>% group_by(publish_date) %>% count() %>% arrange(desc(n))
+#understand how the frequency of headlines is
+news %>% group_by(publish_date) %>% count() %>% ggplot() + geom_line(aes(publish_date,n, group = 1))
+
+library(stringr)
+news_more <- news %>% mutate(year = str_sub(publish_date,1,4),
+                             month = str_sub(publish_date,5,6),
+                             date = str_sub(publish_date,7,8))
+news_more %>% group_by(year) %>% count() %>% ggplot() + geom_line(aes(year, n, group=1)) + geom_bar(aes(year,n),stat='identity')
+
+library(udpipe)
+#model<-udpipe_download_model(language="english")
+udmodel_english <- udpipe_load_model(file = 'english-ud-2.0-170801.udpipe')
+
+news_more_2008 <- news_more %>% filter(year == 2008 & month == 10)
+s <- udpipe_annotate(udmodel_english, news_more_2008$headline_text)
+######head(s)
+x <- data.frame(s)
+library(lattice)
+stats <- txt_freq(x$upos)
+summary(stats)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+print(stats$key)
+barchart(key ~ freq, data = stats, col = "yellow", 
+         main = "UPOS (Universal Parts of Speech)\n frequency of occurrence", 
+         xlab = "Freq")
+## NOUNS
+stats <- subset(x, upos %in% c("NOUN"))
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = head(stats, 20), col = "cadetblue", 
+         main = "Most occurring nouns", xlab = "Freq")
+
+## ADJECTIVES
+stats <- subset(x, upos %in% c("ADJ")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = head(stats, 20), col = "purple", 
+         main = "Most occurring adjectives", xlab = "Freq")
+## VERBS
+stats <- subset(x, upos %in% c("VERB")) 
+stats <- txt_freq(stats$token)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+barchart(key ~ freq, data = head(stats, 20), col = "gold", 
+         main = "Most occurring Verbs", xlab = "Freq")
+
+
+## Using RAKE (Rapid Automatic Keyword Extraction)
+stats <- keywords_rake(x = x, term = "lemma", group = "doc_id", 
+                       relevant = x$upos %in% c("NOUN", "ADJ"))
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ rake, data = head(subset(stats, freq > 3), 20), col = "red", 
+         main = "Keywords identified by RAKE", 
+         xlab = "Rake")
+
+## Using a sequence of POS tags (noun phrases / verb phrases)
+x$phrase_tag <- as_phrasemachine(x$upos, type = "upos")
+stats <- keywords_phrases(x = x$phrase_tag, term = tolower(x$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+stats <- subset(stats, ngram > 1 & freq > 3)
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ freq, data = head(stats, 20), col = "magenta", 
+         main = "Keywords - simple noun phrases", xlab = "Frequency")
+
+
+
+
+
+#=====================PMI======================
+## Using Pointwise Mutual Information Collocations
+
+
+##PMI (pointwise mutual information): log2(P(w1w2) / P(w1) P(w2))
+
+##MD (mutual dependency): log2(P(w1w2)^2 / P(w1) P(w2))
+
+##LFMD (log-frequency biased mutual dependency): MD + log2(P(w1w2))
+
+x$word <- tolower(x$token)
+stats <- keywords_collocation(x = x, term = "word", group = "doc_id")
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+barchart(key ~ pmi, data = head(subset(stats, freq > 3), 20), col = "cadetblue", 
+         main = "Keywords identified by PMI Collocation", 
+         xlab = "PMI (Pointwise Mutual Information)")
+data$pmi
+
+
+#===============Co-Occurence  (Nouns & Adjective)===============
+
+cooc <- cooccurrence(x = subset(x, upos %in% c("NOUN", "VERB")), 
+                     term = "lemma", 
+                     group = c("doc_id"))
+head(cooc)
+
+library(igraph)
+library(ggraph)
+library(ggplot2)
+
+wordnetwork <- head(cooc, 10)
+wordnetwork <- graph_from_data_frame(wordnetwork)
+  ggraph(wordnetwork, layout = "fr") +
+  geom_edge_link(aes(width = cooc, edge_alpha = cooc), edge_colour = "red") +
+  geom_node_text(aes(label = name), col = "darkgreen", size = 4) +
+  theme_graph(base_family = "Times New Roman") +
+  theme(legend.position = "none") +
+  labs(title = "Cooccurrences within sentence", subtitle = "Nouns & Verb")
+
+
+##==============Nouns / adjectives which follow one another=============
+
+
+cooc <- cooccurrence(x$lemma, relevant = x$upos %in% c("NOUN", "VERB"), skipgram = 1)
+head(cooc)
+####  skipgram = 1 which means look to the next word and the word after that.
+
+wordnetwork <- head(cooc, 15)
+wordnetwork <- graph_from_data_frame(wordnetwork)
+ggraph(wordnetwork, layout = "fr") +
+  geom_edge_link(aes(width = cooc, edge_alpha = cooc)) +
+  geom_node_text(aes(label = name), col = "darkgreen", size = 4) +
+  theme_graph(base_family = "Arial Narrow") +
+  labs(title = "Words following one another", subtitle = "Nouns & Adjective")
+
